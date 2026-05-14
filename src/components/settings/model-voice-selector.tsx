@@ -20,12 +20,12 @@ export function ModelVoiceSelector() {
 
   return (
     <div className="grid gap-3 sm:grid-cols-2">
-      <div className="space-y-1.5">
+      <div className="min-w-0 space-y-1.5">
         <label className="text-xs font-medium text-neutral-600 dark:text-neutral-300">
           Model
         </label>
         <Select value={settings.model} onValueChange={setModel}>
-          <SelectTrigger>
+          <SelectTrigger className="min-w-0 [&>span]:block [&>span]:min-w-0 [&>span]:flex-1 [&>span]:truncate [&>span]:text-left">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -43,12 +43,12 @@ export function ModelVoiceSelector() {
         </Select>
       </div>
 
-      <div className="space-y-1.5">
+      <div className="min-w-0 space-y-1.5">
         <label className="text-xs font-medium text-neutral-600 dark:text-neutral-300">
           Voice
         </label>
         <Select value={settings.voice} onValueChange={setVoice}>
-          <SelectTrigger>
+          <SelectTrigger className="min-w-0 [&>span]:block [&>span]:min-w-0 [&>span]:flex-1 [&>span]:truncate [&>span]:text-left">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
