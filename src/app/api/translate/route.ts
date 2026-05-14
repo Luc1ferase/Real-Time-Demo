@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { GoogleGenAI } from "@google/genai";
-import { getServerEnv } from "@/lib/env";
+import { getGeminiEnv, getOpenAIEnv } from "@/lib/env";
 
 /**
  * POST /api/translate
@@ -182,19 +182,9 @@ async function translateWithGemini(args: {
 }
 
 export async function POST(request: Request) {
-  let env: ReturnType<typeof getServerEnv>;
-  try {
-    env = getServerEnv();
-  } catch (err) {
-    return NextResponse.json(
-      {
-        error: "server_misconfigured",
-        detail: err instanceof Error ? err.message : String(err),
-      },
-      { status: 503 },
-    );
-  }
-
+  // Parse the body first so we know which provider's env to validate.
+  // Validating only the requested provider's key means /api/translate
+  // works on a half-configured deployment (e.g. Gemini-only dev).
   const json = await request.json().catch(() => ({}));
   const parsed = bodySchema.safeParse(json);
   if (!parsed.success) {
@@ -204,6 +194,22 @@ export async function POST(request: Request) {
     );
   }
   const { text, targetLang, sourceLang, provider } = parsed.data;
+
+  let apiKey: string;
+  try {
+    apiKey =
+      provider === "openai"
+        ? getOpenAIEnv().OPENAI_API_KEY
+        : getGeminiEnv().GOOGLE_AI_STUDIO_KEY;
+  } catch (err) {
+    return NextResponse.json(
+      {
+        error: "missing_env",
+        detail: err instanceof Error ? err.message : String(err),
+      },
+      { status: 503 },
+    );
+  }
 
   const key = cacheKey(provider, text, targetLang);
   const cached = readCache(key);
@@ -215,13 +221,13 @@ export async function POST(request: Request) {
     const { translation } =
       provider === "openai"
         ? await translateWithOpenAI({
-            apiKey: env.OPENAI_API_KEY,
+            apiKey,
             text,
             targetLang,
             sourceLang,
           })
         : await translateWithGemini({
-            apiKey: env.GOOGLE_AI_STUDIO_KEY,
+            apiKey,
             text,
             targetLang,
             sourceLang,

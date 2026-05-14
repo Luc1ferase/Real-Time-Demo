@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { getServerEnv } from "@/lib/env";
+import { getOpenAIEnv } from "@/lib/env";
 
 const REALTIME_MODELS = [
   "gpt-realtime-2",
@@ -64,7 +64,22 @@ const CLIENT_SECRETS_ENDPOINT =
   "https://api.openai.com/v1/realtime/client_secrets";
 
 export async function POST(request: Request) {
-  const env = getServerEnv();
+  // Only OPENAI_API_KEY is required for this route. Surface a 503 on
+  // misconfig so the UI can render a "missing env" notice rather than a
+  // generic 500.
+  let env: ReturnType<typeof getOpenAIEnv>;
+  try {
+    env = getOpenAIEnv();
+  } catch (err) {
+    return NextResponse.json(
+      {
+        error: "missing_env",
+        detail: err instanceof Error ? err.message : String(err),
+      },
+      { status: 503 },
+    );
+  }
+
   const json = await request.json().catch(() => ({}));
   const parsed = bodySchema.safeParse(json);
   if (!parsed.success) {

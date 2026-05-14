@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { getServerEnv } from "@/lib/env";
+import { getGateEnv } from "@/lib/env";
 import {
   GATE_COOKIE,
   GATE_COOKIE_MAX_AGE_SEC,
@@ -13,7 +13,24 @@ const bodySchema = z.object({
 });
 
 export async function POST(request: Request) {
-  const env = getServerEnv();
+  // The gate must work even when provider keys are missing — it's the
+  // entry point users hit before any provider is selected. Validate only
+  // DEMO_PASSWORD here, surface a 503 with a helpful detail on misconfig
+  // (previously this bubbled as an opaque 500 when any other key was
+  // unset).
+  let env: ReturnType<typeof getGateEnv>;
+  try {
+    env = getGateEnv();
+  } catch (err) {
+    return NextResponse.json(
+      {
+        error: "missing_env",
+        detail: err instanceof Error ? err.message : String(err),
+      },
+      { status: 503 },
+    );
+  }
+
   const json = await request.json().catch(() => null);
   const parsed = bodySchema.safeParse(json);
   if (!parsed.success) {

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { getServerEnv } from "@/lib/env";
+import { getOpenAIEnv } from "@/lib/env";
 import { LANGUAGE_CODES } from "@/lib/translator/languages";
 
 /**
@@ -37,20 +37,21 @@ const CLIENT_SECRETS_ENDPOINT =
   "https://api.openai.com/v1/realtime/client_secrets";
 
 export async function POST(request: Request) {
-  // Hard requirement: translator is OpenAI-only. If the key is missing
-  // the page would otherwise dial into a 502 — short-circuit here so
-  // the UI can render a friendly notice instead.
-  if (!process.env.OPENAI_API_KEY) {
+  // Hard requirement: translator is OpenAI-only. Surface a 503 on missing
+  // env so the UI can render a friendly notice rather than a generic 500.
+  let env: ReturnType<typeof getOpenAIEnv>;
+  try {
+    env = getOpenAIEnv();
+  } catch (err) {
     return NextResponse.json(
       {
-        error: "openai_unavailable",
-        detail: "OPENAI_API_KEY is not configured on the server",
+        error: "missing_env",
+        detail: err instanceof Error ? err.message : String(err),
       },
       { status: 503 },
     );
   }
 
-  const env = getServerEnv();
   const json = await request.json().catch(() => ({}));
   const parsed = bodySchema.safeParse(json);
   if (!parsed.success) {
