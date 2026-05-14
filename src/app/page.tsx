@@ -38,10 +38,8 @@ export default function HomePage() {
               Streaming bidirectional translation using the dedicated{" "}
               <code>gpt-realtime-translate</code> endpoint.
             </p>
-            <Button asChild className="mt-6" disabled>
-              <span aria-disabled className="cursor-not-allowed opacity-60">
-                Coming in PR4
-              </span>
+            <Button asChild className="mt-6">
+              <Link href="/translator">Start translating →</Link>
             </Button>
           </article>
         </section>
