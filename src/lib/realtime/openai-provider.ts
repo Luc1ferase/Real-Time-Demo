@@ -134,7 +134,8 @@ export const openaiProvider: RealtimeProvider = {
 
     // User transcript arrives as a raw transport event with type
     // `conversation.item.input_audio_transcription.completed`. Listen on
-    // the wildcard channel and dispatch.
+    // the wildcard channel and dispatch. OpenAI only emits the final
+    // transcript for a turn, so we always pass `done: true`.
     session.transport.on("*", (event) => {
       if (
         event.type ===
@@ -142,7 +143,7 @@ export const openaiProvider: RealtimeProvider = {
       ) {
         const typed = event as { transcript?: string };
         if (typed.transcript) {
-          config.onUserTranscript?.({ text: typed.transcript });
+          config.onUserTranscript?.({ text: typed.transcript, done: true });
         }
       }
     });
@@ -199,6 +200,13 @@ export const openaiProvider: RealtimeProvider = {
         if (!resolver) return;
         pendingToolResults.delete(callId);
         resolver(typeof output === "string" ? output : JSON.stringify(output));
+      },
+      updateInstructions(instructions) {
+        // The transport merges the partial config with the running session
+        // config and emits a `session.update` wire event. We intentionally do
+        // NOT touch `tools` — the agent's tool list is configured at connect
+        // time and shouldn't drift between stage swaps.
+        session.transport.updateSessionConfig({ instructions });
       },
       interrupt() {
         session.interrupt();

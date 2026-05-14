@@ -71,6 +71,36 @@ function int16ToBase64(pcm: Int16Array): string {
   return Buffer.from(bytes).toString("base64");
 }
 
+function base64ToInt16(data: string): Int16Array {
+  // Decode the base64 payload into a byte buffer, then reinterpret as
+  // little-endian signed 16-bit PCM. Both browser (`atob`) and Node
+  // (`Buffer`) paths produce the same byte sequence.
+  let bytes: Uint8Array;
+  if (typeof atob === "function") {
+    const binary = atob(data);
+    bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+  } else {
+    bytes = Uint8Array.from(Buffer.from(data, "base64"));
+  }
+  // Copy the bytes into a fresh aligned ArrayBuffer so the Int16Array view
+  // is safe regardless of the source buffer's byte offset.
+  const aligned = new ArrayBuffer(bytes.byteLength);
+  new Uint8Array(aligned).set(bytes);
+  return new Int16Array(aligned);
+}
+
+/** Parse `audio/pcm;rate=24000` into 24000; default to 24 kHz on miss. */
+function parseSampleRate(mimeType: string | undefined): number {
+  if (!mimeType) return 24000;
+  const match = /rate=(\d+)/.exec(mimeType);
+  if (!match) return 24000;
+  const rate = Number.parseInt(match[1], 10);
+  return Number.isFinite(rate) && rate > 0 ? rate : 24000;
+}
+
 export const geminiProvider: RealtimeProvider = {
   id: "gemini",
   async connect(
@@ -85,6 +115,15 @@ export const geminiProvider: RealtimeProvider = {
       closedFired = true;
       config.onClose?.();
     };
+
+    // Gemini's `FunctionResponse` requires `name` alongside `id`. The wire
+    // event `toolCall.functionCalls` carries both, but our public
+    // `FunctionCallRequest` only surfaces `callId` + `name` to the consumer
+    // and the consumer hands back only `(callId, output)`. Cache the
+    // call-id -> name mapping here so `returnFunctionResult` can reconstruct
+    // a full `FunctionResponse`. The map is small (one entry per pending
+    // call) and entries are dropped after responding.
+    const pendingCallNames = new Map<string, string>();
 
     // The model id arrives without the `models/` prefix from our UI; the SDK
     // accepts either form, but we normalize for clarity.
@@ -111,18 +150,18 @@ export const geminiProvider: RealtimeProvider = {
           /* setup is sent by the SDK; we wait for serverContent. */
         },
         onmessage: (msg) => {
-          // Input transcription (user speech). Gemini may stream partials;
-          // we forward each chunk and let the UI accumulate.
-          // TODO(PR3): the OpenAI provider only emits the final user
-          // transcript (one event per turn). Gemini streams partials, so
-          // the current consumer (`useRealtimeSession.appendUserTranscript`)
-          // would push one new entry per delta. Align by buffering partials
-          // here until `turnComplete` from input side, or expose a `done`
-          // flag on `UserTranscriptEvent`. Not exercised in PR2 text-only
-          // smoke tests since audio capture isn't wired yet.
+          // Input transcription (user speech). Gemini streams partial deltas
+          // and signals end-of-turn via `Transcription.finished`. We forward
+          // each chunk with its `done` flag; the consumer hook accumulates
+          // partials into a single transcript entry. A standalone `finished`
+          // event with no text is still surfaced so the consumer flips the
+          // tail entry's `done` flag.
           const input = msg.serverContent?.inputTranscription;
-          if (input?.text) {
-            config.onUserTranscript?.({ text: input.text });
+          if (input && (input.text || input.finished)) {
+            config.onUserTranscript?.({
+              text: input.text ?? "",
+              done: input.finished === true,
+            });
           }
           // Output transcription (assistant speech).
           const output = msg.serverContent?.outputTranscription;
@@ -132,12 +171,25 @@ export const geminiProvider: RealtimeProvider = {
               done: false,
             });
           }
-          // Fallback: when the model returns text in modelTurn.parts (happens
-          // when responseModalities does NOT include AUDIO — but harmless to
-          // handle here as well).
+          // Assistant audio: streamed as base64 PCM inside modelTurn.parts.
+          // The corresponding text transcript is delivered separately via
+          // `outputTranscription` above. We hand the raw Int16Array to the
+          // caller's playback sink; text parts (if any) are still forwarded
+          // through the transcript channel as a fallback for cases where
+          // responseModalities omits AUDIO.
           const parts = msg.serverContent?.modelTurn?.parts;
           if (parts) {
             for (const p of parts) {
+              const inline = p.inlineData;
+              if (
+                inline?.data &&
+                inline.mimeType?.startsWith("audio/")
+              ) {
+                config.onAssistantAudio?.({
+                  pcm: base64ToInt16(inline.data),
+                  sampleRate: parseSampleRate(inline.mimeType),
+                });
+              }
               if (typeof p.text === "string" && p.text.length > 0) {
                 config.onAssistantTranscript?.({
                   text: p.text,
@@ -160,9 +212,14 @@ export const geminiProvider: RealtimeProvider = {
               const callId =
                 call.id ??
                 `${call.name ?? "fn"}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
+              const callName = call.name ?? "";
+              // Stash the name so `returnFunctionResult` can include it in
+              // the `FunctionResponse` payload — Gemini documents `name` as
+              // required even though the TS type marks it optional.
+              pendingCallNames.set(callId, callName);
               config.onFunctionCall?.({
                 callId,
-                name: call.name ?? "",
+                name: callName,
                 arguments: (call.args ?? {}) as Record<string, unknown>,
               });
             }
@@ -199,10 +256,17 @@ export const geminiProvider: RealtimeProvider = {
         });
       },
       returnFunctionResult(callId, output) {
+        // Look up the cached name. If we somehow lost it (e.g. the consumer
+        // returns a result for a call we never received), fall back to an
+        // empty string — the API will reject the response and the model will
+        // surface an error, which is preferable to silently dropping it.
+        const name = pendingCallNames.get(callId) ?? "";
+        pendingCallNames.delete(callId);
         session.sendToolResponse({
           functionResponses: [
             {
               id: callId,
+              name,
               // Gemini expects an object payload, not a string.
               response:
                 typeof output === "object" && output !== null
@@ -210,6 +274,28 @@ export const geminiProvider: RealtimeProvider = {
                   : { result: output },
             },
           ],
+        });
+      },
+      updateInstructions(instructions) {
+        // Gemini Live has no system-instruction patch wire event; the
+        // `systemInstruction` field is only honored in the initial `setup`.
+        // We approximate stage swaps by injecting a user-role priming turn
+        // wrapped in an explicit marker so the model recognizes it as a
+        // behavior update. `turnComplete: false` keeps the model from
+        // immediately responding to the priming turn — the next real user
+        // speech (or model turn) drives generation.
+        session.sendClientContent({
+          turns: [
+            {
+              role: "user",
+              parts: [
+                {
+                  text: `[SYSTEM UPDATE] From now on, follow these instructions for the rest of the conversation:\n\n${instructions}`,
+                },
+              ],
+            },
+          ],
+          turnComplete: false,
         });
       },
       interrupt() {

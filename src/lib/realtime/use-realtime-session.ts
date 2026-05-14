@@ -5,6 +5,7 @@ import { geminiProvider } from "./gemini-provider";
 import { openaiProvider } from "./openai-provider";
 import type { RealtimeProvider, RealtimeSessionHandle } from "./provider";
 import type {
+  AssistantAudioEvent,
   FunctionCallRequest,
   ProviderId,
   SessionStatus,
@@ -19,6 +20,12 @@ export interface UseRealtimeSessionOptions {
   instructions: string;
   tools?: ToolDefinition[];
   onFunctionCall?(call: FunctionCallRequest): void;
+  /**
+   * Raw assistant audio sink. Only fires for providers that surface audio
+   * as a callback (Gemini). OpenAI's WebRTC transport plays audio on a
+   * media track and does not invoke this.
+   */
+  onAssistantAudio?(event: AssistantAudioEvent): void;
 }
 
 export interface UseRealtimeSessionResult {
@@ -29,6 +36,10 @@ export interface UseRealtimeSessionResult {
   connect(): Promise<void>;
   /** Send a user text turn (works for both providers). */
   send(text: string): void;
+  /** Push a raw 16-bit PCM chunk to the active session. */
+  sendAudio(chunk: Int16Array): void;
+  /** Swap the system instructions on the active session in place. */
+  updateInstructions(instructions: string): void;
   /** Cancel the in-flight assistant response. */
   interrupt(): void;
   /** Close and release the underlying transport. */
@@ -64,17 +75,37 @@ export function useRealtimeSession(
   });
 
   const appendUserTranscript = useCallback(
-    (text: string) => {
-      setTranscripts((prev) => [
-        ...prev,
-        {
-          id: nextId(),
-          role: "user",
-          text,
-          done: true,
-          createdAt: Date.now(),
-        },
-      ]);
+    (text: string, done: boolean) => {
+      setTranscripts((prev) => {
+        const last = prev[prev.length - 1];
+        // If the in-flight tail is an unfinished user entry, merge into it.
+        // OpenAI emits only finals (done=true with full text) — that flow
+        // falls through to the push branch below since there is no prior
+        // partial. Gemini streams partials that share this branch and
+        // accumulate cleanly into one entry.
+        if (last && last.role === "user" && !last.done) {
+          const merged: TranscriptEntry = {
+            ...last,
+            text: text.length > 0 ? last.text + text : last.text,
+            done,
+          };
+          return [...prev.slice(0, -1), merged];
+        }
+        if (text.length === 0 && done) {
+          // Stray end-of-turn with nothing to attach to — ignore.
+          return prev;
+        }
+        return [
+          ...prev,
+          {
+            id: nextId(),
+            role: "user",
+            text,
+            done,
+            createdAt: Date.now(),
+          },
+        ];
+      });
     },
     [],
   );
@@ -137,13 +168,18 @@ export function useRealtimeSession(
         voice: opts.voice,
         instructions: opts.instructions,
         tools: opts.tools,
-        onUserTranscript: ({ text }) => {
+        onUserTranscript: ({ text, done }) => {
           if (epochRef.current !== myEpoch) return;
-          appendUserTranscript(text);
+          // OpenAI omits `done` (always final); treat undefined as true.
+          appendUserTranscript(text, done ?? true);
         },
         onAssistantTranscript: ({ text, done }) => {
           if (epochRef.current !== myEpoch) return;
           appendAssistantTranscript(text, done);
+        },
+        onAssistantAudio: (event) => {
+          if (epochRef.current !== myEpoch) return;
+          optionsRef.current.onAssistantAudio?.(event);
         },
         onFunctionCall: (call) => {
           if (epochRef.current !== myEpoch) return;
@@ -176,6 +212,14 @@ export function useRealtimeSession(
 
   const send = useCallback((text: string) => {
     handleRef.current?.sendUserText(text);
+  }, []);
+
+  const sendAudio = useCallback((chunk: Int16Array) => {
+    handleRef.current?.sendUserAudio?.(chunk);
+  }, []);
+
+  const updateInstructions = useCallback((instructions: string) => {
+    handleRef.current?.updateInstructions(instructions);
   }, []);
 
   const interrupt = useCallback(() => {
@@ -226,6 +270,8 @@ export function useRealtimeSession(
       transcripts,
       connect,
       send,
+      sendAudio,
+      updateInstructions,
       interrupt,
       disconnect,
       returnFunctionResult,
@@ -236,6 +282,8 @@ export function useRealtimeSession(
       transcripts,
       connect,
       send,
+      sendAudio,
+      updateInstructions,
       interrupt,
       disconnect,
       returnFunctionResult,

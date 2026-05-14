@@ -33,12 +33,30 @@ export interface ToolDefinition {
 
 export interface UserTranscriptEvent {
   text: string;
+  /**
+   * True when this is the final transcript for the user's turn. OpenAI only
+   * emits final transcripts (one event per turn). Gemini streams partial
+   * deltas; the provider sets `done` to `false` for partials and `true` once
+   * the upstream `Transcription.finished` flag arrives.
+   */
+  done?: boolean;
 }
 
 export interface AssistantTranscriptEvent {
   text: string;
   /** True when this is the final transcript for the turn. */
   done: boolean;
+}
+
+/**
+ * Raw 16-bit little-endian PCM at the provider's output sample rate. Only
+ * fires for transports that surface audio as a callback (currently Gemini at
+ * 24 kHz). The OpenAI WebRTC transport plays audio on a media track and
+ * never invokes this callback.
+ */
+export interface AssistantAudioEvent {
+  pcm: Int16Array;
+  sampleRate: number;
 }
 
 export interface FunctionCallRequest {

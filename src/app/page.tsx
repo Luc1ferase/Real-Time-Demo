@@ -27,10 +27,8 @@ export default function HomePage() {
               Structured interview flow with stage-switching tool calls and a
               scorecard at the end. Optional live caption overlay.
             </p>
-            <Button asChild className="mt-6" disabled>
-              <span aria-disabled className="cursor-not-allowed opacity-60">
-                Coming in PR2
-              </span>
+            <Button asChild className="mt-6">
+              <Link href="/interview">Start interview →</Link>
             </Button>
           </article>
 
