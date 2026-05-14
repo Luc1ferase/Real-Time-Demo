@@ -3,6 +3,7 @@ import type {
   AssistantTranscriptEvent,
   FunctionCallRequest,
   ProviderId,
+  ReasoningEffort,
   ToolDefinition,
   UserTranscriptEvent,
 } from "./types";
@@ -12,6 +13,13 @@ export interface RealtimeConnectConfig {
   voice: string;
   instructions: string;
   tools?: ToolDefinition[];
+  /**
+   * Optional reasoning-effort knob. Only honored by OpenAI's
+   * `gpt-realtime-2`; other models/providers ignore the field. The
+   * provider impl is responsible for guarding against sending it on
+   * unsupported models (would 400 from `/v1/realtime/client_secrets`).
+   */
+  reasoningEffort?: ReasoningEffort;
   onUserTranscript?(event: UserTranscriptEvent): void;
   onAssistantTranscript?(event: AssistantTranscriptEvent): void;
   /**

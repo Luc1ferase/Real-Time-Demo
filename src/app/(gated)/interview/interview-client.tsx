@@ -8,6 +8,7 @@ import {
   StartScreen,
   type StartScreenSelection,
 } from "@/components/interview/start-screen";
+import { TranslationOverlay } from "@/components/interview/translation-overlay";
 import { startAudioCapture } from "@/lib/realtime/audio-capture";
 import type { AudioCaptureHandle } from "@/lib/realtime/audio-capture";
 import {
@@ -32,6 +33,8 @@ import type {
   FunctionCallRequest,
   ProviderId,
 } from "@/lib/realtime/types";
+import { useSettings } from "@/lib/settings/settings-context";
+import { modelSupportsReasoningEffort } from "@/lib/settings/model-options";
 
 /**
  * High-level phases of the /interview screen. The Realtime hook has its own
@@ -46,22 +49,6 @@ type Phase =
   | "finished"
   | "error";
 
-const DEFAULT_SELECTION: StartScreenSelection = {
-  providerId: "gemini",
-  job: "fullstack",
-  difficulty: "medium",
-};
-
-const MODEL_BY_PROVIDER: Record<ProviderId, string> = {
-  openai: "gpt-realtime-2",
-  gemini: "gemini-3.1-flash-live-preview",
-};
-
-const VOICE_BY_PROVIDER: Record<ProviderId, string> = {
-  openai: "marin",
-  gemini: "Puck",
-};
-
 const INPUT_RATE_BY_PROVIDER: Record<ProviderId, number> = {
   openai: 24000,
   gemini: 16000,
@@ -71,10 +58,51 @@ const IDLE_TIMEOUT_MS = 10 * 60 * 1000;
 const HARD_CAP_WARNING_MS = 59 * 60 * 1000;
 
 export function InterviewClient() {
+  const { settings } = useSettings();
   const [phase, setPhase] = useState<Phase>("configuring");
-  const [selection, setSelection] = useState<StartScreenSelection>(
-    DEFAULT_SELECTION,
-  );
+  // Initial selection seeds from the settings context so the start
+  // screen renders the user's persisted defaults (after hydration).
+  // The selection is then locally mutable — start-screen overrides
+  // never touch the persisted settings unless the user clicks
+  // "Save as default".
+  const [selection, setSelection] = useState<StartScreenSelection>(() => ({
+    providerId: settings.providerId,
+    job: "fullstack",
+    difficulty: "medium",
+    model: settings.model,
+    voice: settings.voice,
+    reasoningEffort: settings.reasoningEffort,
+  }));
+
+  // After settings hydrate from localStorage we want the start screen
+  // to reflect the persisted values. We only sync while the form is
+  // idle (phase === "configuring" and no active session) so we don't
+  // stomp on an in-flight override the user is editing. The setState
+  // call is queued into a microtask so the React Compiler's
+  // "no setState directly in an effect body" rule is satisfied — the
+  // transition is driven by an external store (localStorage hydration).
+  const phaseRef = useRef(phase);
+  useEffect(() => {
+    phaseRef.current = phase;
+  }, [phase]);
+  useEffect(() => {
+    if (phaseRef.current !== "configuring") return;
+    queueMicrotask(() => {
+      if (phaseRef.current !== "configuring") return;
+      setSelection((prev) => ({
+        ...prev,
+        providerId: settings.providerId,
+        model: settings.model,
+        voice: settings.voice,
+        reasoningEffort: settings.reasoningEffort,
+      }));
+    });
+  }, [
+    settings.providerId,
+    settings.model,
+    settings.voice,
+    settings.reasoningEffort,
+  ]);
   // The active selection is frozen the moment the user clicks "Start". The
   // start-screen `selection` may keep changing if they go back to configure
   // another run — we never read it from the live screen.
@@ -214,12 +242,26 @@ export function InterviewClient() {
     [],
   );
 
+  // Resolve the effective model/voice/reasoning for the hook from the
+  // active selection (if dialing) or the current start-screen selection
+  // (while still configuring). `modelSupportsReasoningEffort` guards the
+  // knob from being sent to non-flagship models.
+  const sourceSel = activeSelection ?? selection;
+  const hookModel = sourceSel.model;
+  const hookVoice = sourceSel.voice;
+  const hookReasoning =
+    sourceSel.providerId === "openai" &&
+    modelSupportsReasoningEffort(hookModel)
+      ? sourceSel.reasoningEffort
+      : undefined;
+
   const session = useRealtimeSession({
     providerId: providerForHook,
-    model: MODEL_BY_PROVIDER[providerForHook],
-    voice: VOICE_BY_PROVIDER[providerForHook],
+    model: hookModel,
+    voice: hookVoice,
     instructions: initialInstructions,
     tools: INTERVIEW_TOOLS,
+    reasoningEffort: hookReasoning,
     onFunctionCall: handleFunctionCall,
     onAssistantAudio: handleAssistantAudio,
   });
@@ -422,18 +464,33 @@ export function InterviewClient() {
 
   if (phase === "live" || phase === "connecting") {
     return (
-      <LiveScreen
-        stage={stage}
-        transcripts={session.transcripts}
-        connectedAt={connectedAt}
-        micActive={micActive}
-        warningMessage={
-          phase === "connecting"
-            ? "Connecting to the interviewer…"
-            : warningMessage
-        }
-        onEnd={handleEnd}
-      />
+      <>
+        <LiveScreen
+          stage={stage}
+          transcripts={session.transcripts}
+          connectedAt={connectedAt}
+          micActive={micActive}
+          warningMessage={
+            phase === "connecting"
+              ? "Connecting to the interviewer…"
+              : warningMessage
+          }
+          onEnd={handleEnd}
+        />
+        {/*
+          Translation overlay: read-only consumer of the transcript
+          stream. Mounting/unmounting it never touches the underlying
+          Realtime session — when the user flips the toggle in the
+          settings drawer mid-interview the overlay just disappears.
+        */}
+        {settings.translation.enabled ? (
+          <TranslationOverlay
+            transcripts={session.transcripts}
+            provider={sourceSel.providerId}
+            targetLang={settings.translation.targetLang}
+          />
+        ) : null}
+      </>
     );
   }
 

@@ -8,6 +8,7 @@ import type {
   AssistantAudioEvent,
   FunctionCallRequest,
   ProviderId,
+  ReasoningEffort,
   SessionStatus,
   ToolDefinition,
   TranscriptEntry,
@@ -19,6 +20,12 @@ export interface UseRealtimeSessionOptions {
   voice: string;
   instructions: string;
   tools?: ToolDefinition[];
+  /**
+   * Optional reasoning-effort knob. Forwarded to the provider's connect
+   * call; ignored by providers that don't support it (currently only
+   * OpenAI's `gpt-realtime-2` honors the field).
+   */
+  reasoningEffort?: ReasoningEffort;
   onFunctionCall?(call: FunctionCallRequest): void;
   /**
    * Raw assistant audio sink. Only fires for providers that surface audio
@@ -168,6 +175,7 @@ export function useRealtimeSession(
         voice: opts.voice,
         instructions: opts.instructions,
         tools: opts.tools,
+        reasoningEffort: opts.reasoningEffort,
         onUserTranscript: ({ text, done }) => {
           if (epochRef.current !== myEpoch) return;
           // OpenAI omits `done` (always final); treat undefined as true.

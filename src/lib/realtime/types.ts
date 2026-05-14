@@ -6,6 +6,19 @@
 
 export type ProviderId = "openai" | "gemini";
 
+/**
+ * Reasoning-effort options exposed by OpenAI's `gpt-realtime-2`. Other
+ * realtime models (and Gemini) ignore the value. Lives in the shared
+ * realtime types module so both the provider abstraction and the
+ * settings layer can reference it without crossing the layer boundary.
+ */
+export type ReasoningEffort =
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh";
+
 export type SessionStatus =
   | "idle"
   | "connecting"

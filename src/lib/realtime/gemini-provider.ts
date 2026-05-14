@@ -106,6 +106,9 @@ export const geminiProvider: RealtimeProvider = {
   async connect(
     config: RealtimeConnectConfig,
   ): Promise<RealtimeSessionHandle> {
+    // Gemini Live has no reasoning-effort equivalent — `config.reasoningEffort`
+    // is intentionally ignored. See PR4 spec; OpenAI's `gpt-realtime-2` is
+    // currently the only model exposing this knob.
     const apiKey = await fetchGeminiKey();
     const ai = new GoogleGenAI({ apiKey });
 

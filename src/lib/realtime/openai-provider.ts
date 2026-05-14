@@ -10,9 +10,14 @@ import type {
   RealtimeProvider,
   RealtimeSessionHandle,
 } from "./provider";
-import type { ToolDefinition } from "./types";
+import type { ReasoningEffort, ToolDefinition } from "./types";
 
 const TOKEN_ENDPOINT = "/api/realtime/token/openai";
+
+/** Only `gpt-realtime-2` accepts `reasoning.effort`. */
+const REASONING_EFFORT_MODELS: ReadonlySet<string> = new Set([
+  "gpt-realtime-2",
+]);
 
 interface OpenAITokenResponse {
   value: string;
@@ -26,11 +31,19 @@ async function mintEphemeralToken(
   model: string,
   voice: string,
   instructions: string,
+  reasoningEffort?: ReasoningEffort,
 ): Promise<string> {
+  // Strip reasoning_effort for non-flagship models. The token route also
+  // enforces this, but a client-side guard means we never pollute the
+  // wire body with a field the server will reject.
+  const allowEffort =
+    reasoningEffort && REASONING_EFFORT_MODELS.has(model);
+  const body: Record<string, unknown> = { model, voice, instructions };
+  if (allowEffort) body.reasoning_effort = reasoningEffort;
   const res = await fetch(TOKEN_ENDPOINT, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model, voice, instructions }),
+    body: JSON.stringify(body),
   });
   if (!res.ok) {
     const detail = await res.text();
@@ -92,6 +105,7 @@ export const openaiProvider: RealtimeProvider = {
       config.model,
       config.voice,
       config.instructions,
+      config.reasoningEffort,
     );
 
     const pendingToolResults = new Map<string, (output: string) => void>();
@@ -110,10 +124,24 @@ export const openaiProvider: RealtimeProvider = {
       tools,
     });
 
+    // The SDK's `RealtimeSession` accepts a partial session config; the
+    // typed surface (`clientMessages.d.ts`) exposes `reasoning.effort` as
+    // a first-class field. Pass it in on construction so the session
+    // config sent on connect matches what the ephemeral token was minted
+    // with; otherwise the session-update wire event could drift.
+    const allowEffort =
+      config.reasoningEffort && REASONING_EFFORT_MODELS.has(config.model);
     const session = new RealtimeSession(agent, {
       apiKey,
       model: config.model,
       transport: typeof window === "undefined" ? "websocket" : "webrtc",
+      ...(allowEffort
+        ? {
+            config: {
+              reasoning: { effort: config.reasoningEffort },
+            },
+          }
+        : {}),
     });
 
     session.on("error", (e) => {

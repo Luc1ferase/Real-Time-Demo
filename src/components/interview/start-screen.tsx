@@ -1,16 +1,39 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
-import type { ProviderId } from "@/lib/realtime/types";
+import type { ProviderId, ReasoningEffort } from "@/lib/realtime/types";
 import type {
   Difficulty,
   JobTrack,
 } from "@/lib/realtime/interview-instructions";
+import {
+  DEFAULT_MODEL_BY_PROVIDER,
+  DEFAULT_VOICE_BY_PROVIDER,
+  MODELS_BY_PROVIDER,
+  VOICES_BY_PROVIDER,
+  REASONING_EFFORT_OPTIONS,
+  modelSupportsReasoningEffort,
+} from "@/lib/settings/model-options";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { useSettings } from "@/lib/settings/settings-context";
 
 export interface StartScreenSelection {
   providerId: ProviderId;
   job: JobTrack;
   difficulty: Difficulty;
+  /** Per-session override of the provider's model. Defaults to settings.model. */
+  model: string;
+  /** Per-session override of the provider's voice. Defaults to settings.voice. */
+  voice: string;
+  /** Per-session override of reasoning effort. Only honored on gpt-realtime-2. */
+  reasoningEffort: ReasoningEffort;
 }
 
 interface StartScreenProps {
@@ -19,6 +42,12 @@ interface StartScreenProps {
   onStart(): void;
   /** True when we're currently dialing the provider — disables the form. */
   busy?: boolean;
+  /**
+   * Caller hook so the "Save as default" link opens the settings drawer
+   * (with the current per-session values already written back via
+   * settings context — see `InterviewClient`).
+   */
+  onOpenSettings?: () => void;
 }
 
 const PROVIDERS: { id: ProviderId; label: string; hint: string }[] = [
@@ -113,7 +142,52 @@ export function StartScreen({
   onChange,
   onStart,
   busy,
+  onOpenSettings,
 }: StartScreenProps) {
+  const { setSettings, settings } = useSettings();
+  const [showAdvanced, setShowAdvanced] = useState(false);
+
+  // Whenever the provider changes, reset model + voice on the active
+  // selection to that provider's defaults. The caller may also pass us a
+  // selection that drifted — clamp here so the <Select> doesn't render
+  // an out-of-list value.
+  useEffect(() => {
+    const validModels = MODELS_BY_PROVIDER[selection.providerId].map(
+      (m) => m.id,
+    );
+    const validVoices = VOICES_BY_PROVIDER[selection.providerId].map(
+      (v) => v.id,
+    );
+    if (
+      !validModels.includes(selection.model) ||
+      !validVoices.includes(selection.voice)
+    ) {
+      onChange({
+        ...selection,
+        model: validModels.includes(selection.model)
+          ? selection.model
+          : DEFAULT_MODEL_BY_PROVIDER[selection.providerId],
+        voice: validVoices.includes(selection.voice)
+          ? selection.voice
+          : DEFAULT_VOICE_BY_PROVIDER[selection.providerId],
+      });
+    }
+  }, [selection, onChange]);
+
+  const models = MODELS_BY_PROVIDER[selection.providerId];
+  const voices = VOICES_BY_PROVIDER[selection.providerId];
+  const showEffort =
+    selection.providerId === "openai" &&
+    modelSupportsReasoningEffort(selection.model);
+
+  // True when at least one of the per-session overrides differs from the
+  // settings defaults. Toggles the "Save as default" link.
+  const overridesDefaults =
+    selection.providerId !== settings.providerId ||
+    selection.model !== settings.model ||
+    selection.voice !== settings.voice ||
+    selection.reasoningEffort !== settings.reasoningEffort;
+
   return (
     <section className="mx-auto w-full max-w-2xl space-y-8 px-6 py-10">
       <header className="space-y-2">
@@ -135,7 +209,17 @@ export function StartScreen({
           legend="Provider"
           options={PROVIDERS}
           value={selection.providerId}
-          onChange={(id) => onChange({ ...selection, providerId: id })}
+          onChange={(id) =>
+            onChange({
+              ...selection,
+              providerId: id,
+              // Switching providers must reset model + voice — they are
+              // provider-scoped and an OpenAI voice would 400 against
+              // Gemini's session config (and vice versa).
+              model: DEFAULT_MODEL_BY_PROVIDER[id],
+              voice: DEFAULT_VOICE_BY_PROVIDER[id],
+            })
+          }
           disabled={busy}
         />
         <RadioGroup<JobTrack>
@@ -153,19 +237,125 @@ export function StartScreen({
           disabled={busy}
         />
 
-        <div className="flex items-center justify-between pt-2">
+        <div>
+          <button
+            type="button"
+            onClick={() => setShowAdvanced((v) => !v)}
+            disabled={busy}
+            className="text-xs font-medium text-neutral-500 underline-offset-4 hover:underline disabled:opacity-50"
+          >
+            {showAdvanced ? "Hide" : "Show"} model & voice
+          </button>
+          {showAdvanced ? (
+            <div className="mt-3 grid gap-3 sm:grid-cols-2">
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-neutral-600 dark:text-neutral-300">
+                  Model
+                </label>
+                <Select
+                  value={selection.model}
+                  onValueChange={(v) => onChange({ ...selection, model: v })}
+                  disabled={busy}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {models.map((m) => (
+                      <SelectItem key={m.id} value={m.id}>
+                        {m.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-neutral-600 dark:text-neutral-300">
+                  Voice
+                </label>
+                <Select
+                  value={selection.voice}
+                  onValueChange={(v) => onChange({ ...selection, voice: v })}
+                  disabled={busy}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {voices.map((v) => (
+                      <SelectItem key={v.id} value={v.id}>
+                        {v.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              {showEffort ? (
+                <div className="space-y-1.5 sm:col-span-2">
+                  <label className="text-xs font-medium text-neutral-600 dark:text-neutral-300">
+                    Reasoning effort (flagship only)
+                  </label>
+                  <Select
+                    value={selection.reasoningEffort}
+                    onValueChange={(v) =>
+                      onChange({
+                        ...selection,
+                        reasoningEffort: v as ReasoningEffort,
+                      })
+                    }
+                    disabled={busy}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {REASONING_EFFORT_OPTIONS.map((opt) => (
+                        <SelectItem key={opt.id} value={opt.id}>
+                          {opt.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+
+        <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
           <p className="text-xs text-neutral-500">
             Microphone permission is required. The interview auto-ends after
             10 min idle or 60 min total.
           </p>
-          <Button
-            type="button"
-            size="lg"
-            onClick={onStart}
-            disabled={busy}
-          >
-            {busy ? "Connecting…" : "Start interview"}
-          </Button>
+          <div className="flex items-center gap-3">
+            {overridesDefaults ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setSettings({
+                    providerId: selection.providerId,
+                    model: selection.model,
+                    voice: selection.voice,
+                    reasoningEffort: selection.reasoningEffort,
+                    translation: settings.translation,
+                  });
+                  onOpenSettings?.();
+                }}
+                disabled={busy}
+                className="text-xs font-medium text-emerald-700 underline underline-offset-4 hover:text-emerald-800 disabled:opacity-50 dark:text-emerald-400 dark:hover:text-emerald-300"
+              >
+                Save as default
+              </button>
+            ) : null}
+            <Button
+              type="button"
+              size="lg"
+              onClick={onStart}
+              disabled={busy}
+            >
+              {busy ? "Connecting…" : "Start interview"}
+            </Button>
+          </div>
         </div>
       </div>
     </section>

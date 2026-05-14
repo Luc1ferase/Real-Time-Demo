@@ -22,11 +22,42 @@ const REALTIME_VOICES = [
   "verse",
 ] as const;
 
-const bodySchema = z.object({
-  model: z.enum(REALTIME_MODELS).default("gpt-realtime-2"),
-  voice: z.enum(REALTIME_VOICES).default("marin"),
-  instructions: z.string().max(8000).optional(),
-});
+const REASONING_EFFORTS = [
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+] as const;
+
+// `gpt-realtime-2` is the only realtime model that accepts
+// `reasoning.effort` at session config time — sending the field on any
+// other model returns 400 from `/v1/realtime/client_secrets`. We
+// enforce that constraint at the route handler so a misconfigured
+// client can't burn an upstream round-trip.
+const REASONING_EFFORT_MODELS: ReadonlySet<string> = new Set([
+  "gpt-realtime-2",
+]);
+
+const bodySchema = z
+  .object({
+    model: z.enum(REALTIME_MODELS).default("gpt-realtime-2"),
+    voice: z.enum(REALTIME_VOICES).default("marin"),
+    instructions: z.string().max(8000).optional(),
+    reasoning_effort: z.enum(REASONING_EFFORTS).optional(),
+  })
+  .superRefine((val, ctx) => {
+    if (
+      val.reasoning_effort !== undefined &&
+      !REASONING_EFFORT_MODELS.has(val.model)
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["reasoning_effort"],
+        message: `reasoning_effort is only supported by gpt-realtime-2, not ${val.model}`,
+      });
+    }
+  });
 
 const TOKEN_TTL_SEC = 600;
 const CLIENT_SECRETS_ENDPOINT =
@@ -43,7 +74,34 @@ export async function POST(request: Request) {
     );
   }
 
-  const { model, voice, instructions } = parsed.data;
+  const { model, voice, instructions, reasoning_effort } = parsed.data;
+
+  const sessionConfig: Record<string, unknown> = {
+    type: "realtime",
+    model,
+    instructions:
+      instructions ??
+      "You are a warm, structured interview assistant. Keep your turns short.",
+    audio: {
+      input: {
+        format: { type: "audio/pcm", rate: 24000 },
+        turn_detection: {
+          type: "semantic_vad",
+          create_response: true,
+          interrupt_response: true,
+        },
+        transcription: { model: "gpt-4o-mini-transcribe" },
+      },
+      output: { format: { type: "audio/pcm" }, voice },
+    },
+  };
+  // Only forward `reasoning.effort` for the flagship model. The schema
+  // already rejects mismatched (model, effort) pairs with a 400, but
+  // defense-in-depth here means a future regression on the schema can't
+  // silently send the field to the upstream.
+  if (reasoning_effort && REASONING_EFFORT_MODELS.has(model)) {
+    sessionConfig.reasoning = { effort: reasoning_effort };
+  }
 
   const upstream = await fetch(CLIENT_SECRETS_ENDPOINT, {
     method: "POST",
@@ -56,25 +114,7 @@ export async function POST(request: Request) {
     },
     body: JSON.stringify({
       expires_after: { anchor: "created_at", seconds: TOKEN_TTL_SEC },
-      session: {
-        type: "realtime",
-        model,
-        instructions:
-          instructions ??
-          "You are a warm, structured interview assistant. Keep your turns short.",
-        audio: {
-          input: {
-            format: { type: "audio/pcm", rate: 24000 },
-            turn_detection: {
-              type: "semantic_vad",
-              create_response: true,
-              interrupt_response: true,
-            },
-            transcription: { model: "gpt-4o-mini-transcribe" },
-          },
-          output: { format: { type: "audio/pcm" }, voice },
-        },
-      },
+      session: sessionConfig,
     }),
   });
 
