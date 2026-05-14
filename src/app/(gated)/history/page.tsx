@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { HistoryClient } from "./history-client";
 
 export const metadata: Metadata = {
-  title: "Interview history — Realtime Voice Demo",
+  title: "Interview history — Realtime Voice",
   description:
     "Browse, review, and delete past interview sessions stored in this browser.",
 };

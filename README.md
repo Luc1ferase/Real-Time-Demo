@@ -1,16 +1,16 @@
-# Realtime Voice Demo
+# Realtime Voice
 
-> A small, opinionated portfolio project that ships two voice agents on top of OpenAI's May 2026 Realtime API and Google's Gemini Live API, with a runtime provider switch, function-call-driven interview flow, dedicated live-translation endpoint, and a localStorage-backed history page. Built end-to-end in roughly two days to learn the new APIs and to dogfood the engineering trade-offs around multi-provider voice agents.
+> A small, opinionated personal project that ships two voice agents on top of OpenAI's May 2026 Realtime API and Google's Gemini Live API, with a runtime provider switch, function-call-driven interview flow, dedicated live-translation endpoint, and a localStorage-backed history page. Built end-to-end in roughly two days to learn the new APIs and to dogfood the engineering trade-offs around multi-provider voice agents.
 
 [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2FLuc1ferase%2FReal-Time-Demo&env=OPENAI_API_KEY,GOOGLE_AI_STUDIO_KEY,DEMO_PASSWORD&envDescription=Server-only%20secrets%20%E2%80%94%20see%20.env.example&envLink=https%3A%2F%2Fgithub.com%2FLuc1ferase%2FReal-Time-Demo%2Fblob%2Fmain%2F.env.example)
 
 ---
 
-## Demo
+## Screenshots
 
 Drop a screenshot or GIF at `docs/screenshot.png` and it will render here:
 
-![Realtime Voice Demo — interview screen with stage indicator and live transcript](docs/screenshot.png)
+![Realtime Voice — interview screen with stage indicator and live transcript](docs/screenshot.png)
 
 The same chrome works for `/translator` (paired transcript) and `/history` (past sessions list).
 
@@ -89,14 +89,14 @@ A condensed view of the facts that drove this project's design decisions. Source
 
 ## Security model
 
-Three independent layers, deliberately scoped at "demo behind a shared password" rather than "production multi-tenant":
+Three independent layers, deliberately scoped at "single-user app behind a shared password" rather than "production multi-tenant":
 
 1. **Edge proxy gate.** `src/proxy.ts` rejects every request without a valid signed cookie and bounces the user to `/gate`. The cookie is an HMAC of `DEMO_PASSWORD` with a 24-hour TTL. Rotate `DEMO_PASSWORD` to invalidate every outstanding session.
 2. **OpenAI ephemeral tokens.** `OPENAI_API_KEY` only exists in server route handlers (`/api/realtime/token/openai`, `/api/realtime/translator-token`, `/api/translate`). The browser receives a 10-minute `ek_…` secret derived from `POST /v1/realtime/client_secrets`. The raw key never crosses the network boundary.
 3. **Gemini direct-key exposure (acknowledged trade-off).** Gemini Live has no ephemeral-token concept as of May 2026 (`bidiGenerateContent` is auth'd via `?key=…` on the URL). After the gate cookie check, the browser is handed the raw `GOOGLE_AI_STUDIO_KEY`. Hardening recommendations:
    - Use a dedicated low-quota key.
    - Rotate weekly.
-   - For real production, replace this path with a server-side WebSocket proxy that holds the key and forwards frames to the browser; the demo's gemini-provider client already abstracts the transport, so the swap is contained.
+   - For real production, replace this path with a server-side WebSocket proxy that holds the key and forwards frames to the browser; the app's gemini-provider client already abstracts the transport, so the swap is contained.
 
 No analytics, no third-party trackers, no PII written to disk on the server. Interview transcripts are stored in **browser localStorage** under the user's control (clear-all wipes the key in one click).
 
@@ -163,10 +163,10 @@ Custom domains: add via Vercel's domains panel. No `.well-known` proofs ship in 
 
 Each decision links back to the full context in the task PRD. Short version here:
 
-- **Two providers behind one hook (`useRealtimeSession`).** [PRD §Tech Stack]. Adding Gemini Live gave the demo a 10× cost-cheaper free-tier path *and* a stronger interview story — "I evaluated two realtime providers and built a transport-agnostic abstraction so the UI can swap mid-session". The provider interface lives in `src/lib/realtime/provider.ts`.
+- **Two providers behind one hook (`useRealtimeSession`).** [PRD §Tech Stack]. Adding Gemini Live gave the project a 10× cost-cheaper free-tier path *and* a stronger interview story — "I evaluated two realtime providers and built a transport-agnostic abstraction so the UI can swap mid-session". The provider interface lives in `src/lib/realtime/provider.ts`.
 - **`/translator` is OpenAI-only on purpose.** [PRD §Technical Decisions, ADR-4]. OpenAI's `gpt-realtime-translate` is a dedicated endpoint with no chatty preamble. Gemini has no equivalent — a prompt-hack on the generic model gives unreliable, inconsistent "Sure, here's the translation…" output. Better to pick the right tool than fake provider parity.
 - **Caption overlay is a chat side-channel, not a second Realtime session.** [PRD §Technical Decisions, ADR-5]. Mounting a second voice session would compete for the mic; piping the assistant transcript through a one-shot `gpt-4o-mini`/`gemini-2.5-flash-lite` translate keeps the live conversation untouched and adds only ~1–2 s overlay latency.
-- **Edge proxy gate instead of NextAuth.** [PRD §Technical Decisions, ADR-7]. The demo only needs to block strangers from burning the API budget. A single env-var password + signed cookie is five minutes of code and zero new dependencies; swap to NextAuth on the day it actually needs multi-tenant auth.
+- **Edge proxy gate instead of NextAuth.** [PRD §Technical Decisions, ADR-7]. The app only needs to block strangers from burning the API budget. A single env-var password + signed cookie is five minutes of code and zero new dependencies; swap to NextAuth on the day it actually needs multi-tenant auth.
 - **Persist history client-side only.** [PRD §会话历史]. No backend storage means zero infra and zero data-handling questions. The trade-off is "one device" — listed under Limitations below.
 
 Full ADR-style write-ups: see `.trellis/tasks/05-14-realtime-voice-demo-interview-project/prd.md`.
@@ -175,7 +175,7 @@ Full ADR-style write-ups: see `.trellis/tasks/05-14-realtime-voice-demo-intervie
 
 ## Known limitations
 
-- **Gemini API key reaches the browser.** Acceptable behind the gate cookie for a single-tenant demo; not acceptable for production. Future hardening = server-side WS proxy.
+- **Gemini API key reaches the browser.** Acceptable behind the gate cookie for a single-tenant app; not acceptable for production. Future hardening = server-side WS proxy.
 - **60-minute hard provider cap.** OpenAI and Gemini both enforce this server-side. The client warns at the 59-minute mark and gracefully tears down at provider close.
 - **/translator pair-bucketing uses a 1.2 s gap heuristic.** Works well for typical conversation cadence; the `elapsed_ms` field on each delta would be a more precise upgrade (documented in `research/translator-session-shape.md`).
 - **No multi-user / per-account history.** All transcripts live in a single shared localStorage key. Anyone on the same browser sees the same history. Clear-all wipes everything.
@@ -188,8 +188,8 @@ Full ADR-style write-ups: see `.trellis/tasks/05-14-realtime-voice-demo-intervie
 
 - WebSocket proxy in front of Gemini Live so the AI Studio key never crosses to the browser.
 - Tighter `/translator` pairing via the `elapsed_ms` delta field.
-- Add a second downstream gate for per-API-key quota (e.g. 60 min/day per session cookie) to make the demo safer to share.
-- Optional persistence backend (Postgres + per-user history) — only when the project graduates past "single-user demo".
+- Add a second downstream gate for per-API-key quota (e.g. 60 min/day per session cookie) to make the app safer to share.
+- Optional persistence backend (Postgres + per-user history) — only when the project graduates past "single-user".
 - Vercel Analytics + Speed Insights once a real deploy is up.
 
 ---
@@ -205,5 +205,5 @@ Released under the [MIT License](./LICENSE). Copyright (c) 2026 luciferase.
 - **[OpenAI Realtime API + `@openai/agents`](https://developers.openai.com/api/docs/guides/realtime)** — the May 2026 Realtime guide is excellent; the cookbook on `gpt-realtime-translate` made `/translator` a one-evening build.
 - **[Google `@google/genai`](https://ai.google.dev/api/live)** — Gemini Live's WS protocol docs are thin in places, but the SDK types fill the gaps.
 - **[shadcn/ui](https://ui.shadcn.com/) + [Radix Primitives](https://www.radix-ui.com/primitives)** — every accessibility-correct interaction in this repo came from these.
-- **[Next.js](https://nextjs.org)** — App Router + edge proxy + route handlers in one repo is what makes "demo behind a gate" trivial.
+- **[Next.js](https://nextjs.org)** — App Router + edge proxy + route handlers in one repo is what makes "single-page app behind a gate" trivial.
 - **[Trellis](.trellis/)** — the planning + spec workflow that lives inside `.trellis/` shaped every PR in this repo. The PRD, research docs, and decision log under `.trellis/tasks/05-14-realtime-voice-demo-interview-project/` are the artifact trail.

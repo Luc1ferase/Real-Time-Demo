@@ -10,7 +10,7 @@ export default function HomePage() {
             OpenAI Realtime API · 2026
           </p>
           <h1 className="text-4xl font-semibold tracking-tight">
-            Realtime Voice Demo
+            Realtime Voice
           </h1>
           <p className="text-base leading-relaxed text-neutral-600 dark:text-neutral-400">
             Two voice agents on top of <code>gpt-realtime-2</code>: a structured

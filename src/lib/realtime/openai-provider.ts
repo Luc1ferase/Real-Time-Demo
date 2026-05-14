@@ -118,7 +118,7 @@ export const openaiProvider: RealtimeProvider = {
     );
 
     const agent = new RealtimeAgent({
-      name: "Realtime Demo Agent",
+      name: "Realtime Voice Agent",
       instructions: config.instructions,
       voice: config.voice,
       tools,

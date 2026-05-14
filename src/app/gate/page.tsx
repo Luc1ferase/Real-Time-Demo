@@ -2,7 +2,7 @@ import { Suspense } from "react";
 import { GateForm } from "./gate-form";
 
 export const metadata = {
-  title: "Enter Demo · Realtime Voice",
+  title: "Sign in — Realtime Voice",
 };
 
 export default function GatePage() {
@@ -11,7 +11,7 @@ export default function GatePage() {
       <div className="w-full max-w-sm space-y-8">
         <header className="space-y-2 text-center">
           <h1 className="text-2xl font-semibold tracking-tight">
-            Realtime Voice Demo
+            Realtime Voice
           </h1>
           <p className="text-sm text-neutral-500 dark:text-neutral-400">
             Private preview · enter the access password to continue.

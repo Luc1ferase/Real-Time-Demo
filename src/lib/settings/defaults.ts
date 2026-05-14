@@ -10,7 +10,7 @@ import {
  * only own the provider/model/voice/effort/translation slice — `job` and
  * `difficulty` remain per-interview start-screen state.
  *
- * Gemini is the default because the demo's free-tier path lives there until
+ * Gemini is the default because the free-tier path lives there until
  * OpenAI billing is configured.
  */
 export const DEFAULT_SETTINGS: AppSettings = {

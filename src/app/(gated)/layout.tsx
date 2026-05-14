@@ -4,7 +4,7 @@ import { HeaderActions } from "./header-actions";
 
 /**
  * Shared chrome for gated routes. The route group is purely for layout
- * composition — the underlying proxy already requires the demo gate cookie
+ * composition — the underlying proxy already requires the gate cookie
  * for every non-`/gate` path.
  */
 export default function GatedLayout({
@@ -31,7 +31,7 @@ export default function GatedLayout({
                 History
               </Link>
               <span className="text-xs uppercase tracking-[0.18em] text-neutral-500">
-                Realtime Voice Demo
+                Realtime Voice
               </span>
               <HeaderActions />
             </div>

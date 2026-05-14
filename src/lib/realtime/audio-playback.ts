@@ -5,9 +5,9 @@
  * (see provider parsing). We convert each chunk to Float32 normalized
  * samples and enqueue an AudioBufferSourceNode that plays directly after
  * the previous one — a simple "play next when current ends" queue is good
- * enough for a demo. A small look-ahead avoids hairline gaps at sub-50ms
- * chunk boundaries by scheduling on a monotonic `nextStartTime` rather
- * than relying on `onended` callbacks (which have higher jitter).
+ * enough for this project. A small look-ahead avoids hairline gaps at
+ * sub-50ms chunk boundaries by scheduling on a monotonic `nextStartTime`
+ * rather than relying on `onended` callbacks (which have higher jitter).
  *
  * OpenAI's WebRTC transport plays audio via a media track and never calls
  * into this module — so this is provider-specific glue, not shared

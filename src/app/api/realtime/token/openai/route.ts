@@ -124,7 +124,7 @@ export async function POST(request: Request) {
       Authorization: `Bearer ${env.OPENAI_API_KEY}`,
       "Content-Type": "application/json",
       // TODO(PR3+): derive a per-user identifier (e.g. hashed gate session id)
-      // when the demo grows beyond a single tenant. Hardcoded for now.
+      // if this ever grows beyond a single tenant. Hardcoded for now.
       "OpenAI-Safety-Identifier": "rt-demo-user",
     },
     body: JSON.stringify({

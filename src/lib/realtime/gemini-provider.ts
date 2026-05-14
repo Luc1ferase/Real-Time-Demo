@@ -1,8 +1,8 @@
 // SECURITY NOTE: Gemini Live has no ephemeral-token concept. The browser
 // holds the raw Google AI Studio API key for the duration of the session.
-// This is acceptable here only because the entire app sits behind the demo
-// gate proxy. Production deployments should proxy the WebSocket server-side.
-// See research/gemini-live-api.md, section "Auth model".
+// This is acceptable here only because the entire app sits behind the
+// password gate proxy. Production deployments should proxy the WebSocket
+// server-side. See research/gemini-live-api.md, section "Auth model".
 
 import { GoogleGenAI, Modality, type Session } from "@google/genai";
 

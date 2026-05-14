@@ -60,7 +60,7 @@ export function TranslatorClient() {
           queueMicrotask(() => {
             if (cancelled) return;
             setUnavailableMessage(
-              "The translator requires OPENAI_API_KEY on the server. Ask the demo owner to enable it.",
+              "The translator requires OPENAI_API_KEY on the server. Ask the project owner to enable it.",
             );
           });
         }
@@ -113,7 +113,7 @@ export function TranslatorClient() {
       queueMicrotask(() => {
         if (isMissingKey) {
           setUnavailableMessage(
-            "The translator requires OPENAI_API_KEY on the server. Ask the demo owner to enable it.",
+            "The translator requires OPENAI_API_KEY on the server. Ask the project owner to enable it.",
           );
           setPhase("configuring");
           setConnectedAt(null);

@@ -110,7 +110,7 @@ async function mintToken(
  * mutated entry list.
  *
  * Known limitations of this purely-temporal heuristic (acceptable for
- * a demo, candidates for PR6+):
+ * this project, candidates for PR6+):
  *   - A long mid-sentence pause (> NEW_ROW_GAP_MS) splits one thought
  *     into two paired rows. Switching to `elapsed_ms`-based pairing
  *     (the field is on every delta event) would be the real fix —

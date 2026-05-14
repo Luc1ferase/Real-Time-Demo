@@ -3,7 +3,7 @@
  *
  * OpenAI's `gpt-realtime-translate` supports 70+ source languages
  * (auto-detected) and 13 output languages. We expose 8 — enough to
- * cover the demo's interview audience without overwhelming the UI.
+ * cover the app's interview audience without overwhelming the UI.
  * PR6 may grow this list.
  *
  * Source-language codes flow into `audio.input.transcription.language`
