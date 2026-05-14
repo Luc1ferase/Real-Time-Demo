@@ -23,7 +23,7 @@
 - **Backend**: Next.js Route Handlers
   - `POST /api/realtime/token` — 调用 OpenAI `POST /v1/realtime/client_secrets` 签发 ephemeral token，带 `OpenAI-Safety-Identifier` 头
   - `POST /api/translate` — 字幕 overlay 用，输入文本 → `gpt-4o-mini` chat completion → 翻译文本
-  - `middleware.ts` — 口令门控（cookie 验证），保护两条 demo 路由
+  - `proxy.ts` — 口令门控（cookie 验证），保护两条 demo 路由
 - **Deployment**: Vercel
   - 环境变量：`OPENAI_API_KEY`、`DEMO_PASSWORD`
   - 全程仅 server-side 持有 API key
@@ -115,7 +115,7 @@
 ## Acceptance Criteria
 
 **通用**
-- [ ] 任意路由进入前必须输入 `DEMO_PASSWORD`（middleware 拦截，cookie 持久 24h）
+- [ ] 任意路由进入前必须输入 `DEMO_PASSWORD`（Edge proxy 拦截，cookie 持久 24h）
 - [ ] `OPENAI_API_KEY` 仅在 server route handler 出现，不进客户端 bundle、不进 network 请求 body
 - [ ] 浏览器 devtools network 面板看不到任何裸 API key
 - [ ] README 包含：本项目能力截图、5 分钟启动指引、架构图、关键技术决策说明（为什么用 SDK / 为什么 /translator 用专用端点 / overlay 怎么不污染主会话）
@@ -183,7 +183,7 @@ lib/
     instructions.ts           # 各路由的 system instructions
   translate/
     translate-stream.ts       # 拿 Realtime transcript 调 /api/translate
-middleware.ts          # 口令门控
+proxy.ts          # 口令门控
 ```
 
 ### 关键技术决策（ADR-lite）
@@ -203,7 +203,7 @@ middleware.ts          # 口令门控
    - Decision: 监听 Realtime `response.audio_transcript.done` → 调 `/api/translate`（gpt-4o-mini chat）→ 推回前端显示
    - Consequences: 零干扰原对话；翻译延迟 1-2 秒可接受；额外成本极低
 
-4. **口令门控用 middleware 而非完整 auth 系统**
+4. **口令门控用 Edge proxy 而非完整 auth 系统**
    - Context: 仅需防陌生人乱试 demo URL 烧钱，不是真实产品
    - Decision: 单一 `DEMO_PASSWORD` 环境变量 + cookie 验证
    - Consequences: 5 分钟实现；如果未来想推广到真实多用户，需要替换为 NextAuth 之类

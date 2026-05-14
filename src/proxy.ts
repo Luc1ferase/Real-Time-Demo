@@ -5,7 +5,7 @@ export const config = {
   matcher: ["/((?!_next/static|_next/image|favicon.ico|gate|api/auth/gate).*)"],
 };
 
-export async function middleware(request: NextRequest) {
+export async function proxy(request: NextRequest) {
   const password = process.env.DEMO_PASSWORD;
   if (!password) {
     return new NextResponse("DEMO_PASSWORD not configured on server", {
