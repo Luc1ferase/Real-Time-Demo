@@ -15,7 +15,7 @@
 
 ## Tech Stack (Decided, verified against research/realtime-api-overview.md @ 2026-05-14)
 
-- **Framework**: Next.js 15 (App Router) + TypeScript strict
+- **Framework**: Next.js 16 (App Router) + TypeScript strict
 - **Styling**: Tailwind CSS + shadcn/ui
 - **Realtime SDK**: **`@openai/agents-realtime` v0.11.1**（官方 SDK，封装了 WebRTC peer connection、ephemeral token 流程、VAD、打断、conversation history）
   - 用 `RealtimeAgent` + `RealtimeSession` 高层 API，避免手写 SDP / data channel
