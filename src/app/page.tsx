@@ -44,6 +44,16 @@ export default function HomePage() {
           </article>
         </section>
 
+        <p className="text-center text-xs text-neutral-500">
+          or{" "}
+          <Link
+            href="/history"
+            className="underline underline-offset-4 hover:text-neutral-700 dark:hover:text-neutral-300"
+          >
+            browse past interviews →
+          </Link>
+        </p>
+
         <footer className="border-t border-neutral-200 pt-6 text-xs text-neutral-500 dark:border-neutral-800">
           <p>
             Source:{" "}

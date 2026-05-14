@@ -32,9 +32,16 @@ import {
 import type {
   FunctionCallRequest,
   ProviderId,
+  TranscriptEntry,
 } from "@/lib/realtime/types";
 import { useSettings } from "@/lib/settings/settings-context";
 import { modelSupportsReasoningEffort } from "@/lib/settings/model-options";
+import { saveHistoryEntry } from "@/lib/history/storage";
+import type {
+  EndReason,
+  InterviewHistoryEntry,
+  PersistedTranscript,
+} from "@/lib/history/types";
 
 /**
  * High-level phases of the /interview screen. The Realtime hook has its own
@@ -56,6 +63,42 @@ const INPUT_RATE_BY_PROVIDER: Record<ProviderId, number> = {
 
 const IDLE_TIMEOUT_MS = 10 * 60 * 1000;
 const HARD_CAP_WARNING_MS = 59 * 60 * 1000;
+
+/**
+ * Sessions shorter than this with no user audio aren't worth keeping —
+ * they're typically aborted dial attempts and would just clutter
+ * /history. Sessions that produced ANY user transcript are always
+ * kept, regardless of duration.
+ */
+const MIN_HISTORY_DURATION_MS = 5_000;
+
+/** Compact transcripts for localStorage: drop ids, drop empties, store ts as a delta. */
+function compactTranscripts(
+  transcripts: TranscriptEntry[],
+  startedAt: number,
+): PersistedTranscript[] {
+  const out: PersistedTranscript[] = [];
+  for (const entry of transcripts) {
+    if (entry.role === "system") continue;
+    const text = entry.text.trim();
+    if (text.length === 0) continue;
+    out.push({
+      role: entry.role,
+      text,
+      ts: Math.max(0, entry.createdAt - startedAt),
+    });
+  }
+  return out;
+}
+
+function randomId(): string {
+  // Browsers since 2022 expose `crypto.randomUUID` everywhere we ship,
+  // but the fallback keeps the helper testable in non-browser harnesses.
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+  return `hist_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+}
 
 export function InterviewClient() {
   const { settings } = useSettings();
@@ -124,6 +167,16 @@ export function InterviewClient() {
   const stageRef = useRef<InterviewStage>("warmup");
   const activeSelectionRef = useRef<StartScreenSelection | null>(null);
   const lastUserActivityRef = useRef<number>(0);
+  // Latest transcripts and connectedAt timestamp mirrored into refs so the
+  // history-write paths (idle watchdog, unexpected close, scorecard
+  // disconnect) see the freshest values without participating in deps.
+  const transcriptsRef = useRef<TranscriptEntry[]>([]);
+  const connectedAtRef = useRef<number | null>(null);
+  // Guards against double-persisting the same session — every terminal
+  // transition routes through `persistInterview`, and several can fire
+  // back-to-back (e.g. scorecard timeout disconnects, which then trips
+  // the close effect).
+  const persistedRef = useRef(false);
 
   // Mirror selected pieces of state into refs so async paths (tool
   // callbacks, watchdog interval) read freshest values.
@@ -133,6 +186,9 @@ export function InterviewClient() {
   useEffect(() => {
     activeSelectionRef.current = activeSelection;
   }, [activeSelection]);
+  useEffect(() => {
+    connectedAtRef.current = connectedAt;
+  }, [connectedAt]);
 
   const teardownAudio = useCallback(() => {
     if (captureRef.current) {
@@ -145,6 +201,64 @@ export function InterviewClient() {
     }
     setMicActive(false);
   }, []);
+
+  /**
+   * Write the current session to localStorage history. Idempotent within
+   * a session — `persistedRef` blocks re-entry so the scorecard timeout
+   * disconnect's follow-on close event can't double-save.
+   *
+   * Empty sessions (never went `live`, or `live` for <5s with no user
+   * audio) are skipped — see `MIN_HISTORY_DURATION_MS`.
+   */
+  const persistInterview = useCallback(
+    (
+      endReason: EndReason,
+      scorecardOverride: ScorecardPayload | null = null,
+    ) => {
+      if (persistedRef.current) return;
+      const startedAt = connectedAtRef.current;
+      // Never went live — nothing to persist.
+      if (startedAt === null) return;
+      const sel = activeSelectionRef.current;
+      if (!sel) return;
+      const endedAt = Date.now();
+      const durationMs = Math.max(0, endedAt - startedAt);
+
+      const transcripts = compactTranscripts(
+        transcriptsRef.current,
+        startedAt,
+      );
+      const hasUserAudio = transcripts.some((t) => t.role === "user");
+      if (durationMs < MIN_HISTORY_DURATION_MS && !hasUserAudio) {
+        // Noise: aborted dial or instant disconnect. Drop it.
+        persistedRef.current = true;
+        return;
+      }
+
+      const entry: InterviewHistoryEntry = {
+        id: randomId(),
+        startedAt,
+        endedAt,
+        durationMs,
+        provider: sel.providerId,
+        model: sel.model,
+        voice: sel.voice,
+        reasoningEffort:
+          sel.providerId === "openai" &&
+          modelSupportsReasoningEffort(sel.model)
+            ? sel.reasoningEffort
+            : undefined,
+        jobType: sel.job,
+        difficulty: sel.difficulty,
+        transcripts,
+        scorecard: scorecardOverride ?? scorecard ?? undefined,
+        endReason,
+      };
+      saveHistoryEntry(entry);
+      persistedRef.current = true;
+    },
+    [scorecard],
+  );
 
   /**
    * Tool-call handler. Both `advance_stage` and `generate_scorecard`
@@ -204,7 +318,11 @@ export function InterviewClient() {
         setScorecard(payload);
         liveSession.returnFunctionResult(call.callId, { ok: true });
         // Let the AI deliver its sign-off line first, then close.
+        // Persist BEFORE the close fires so the history entry captures
+        // every transcript and the scorecard together — the post-close
+        // effect would otherwise race the state update for `scorecard`.
         window.setTimeout(() => {
+          persistInterview("completed", payload);
           teardownAudio();
           sessionRef.current?.disconnect();
           setPhase("finished");
@@ -217,7 +335,7 @@ export function InterviewClient() {
         error: `Unknown tool: ${call.name}`,
       });
     },
-    [teardownAudio],
+    [teardownAudio, persistInterview],
   );
 
   // Initial instructions for the warmup stage; only meaningful while the
@@ -272,6 +390,12 @@ export function InterviewClient() {
   useEffect(() => {
     sessionRef.current = session;
   });
+
+  // Mirror the live transcripts so the history-write paths (which run
+  // outside the render loop) see the freshest array.
+  useEffect(() => {
+    transcriptsRef.current = session.transcripts;
+  }, [session.transcripts]);
 
   const lastUserText = useMemo(() => {
     for (let i = session.transcripts.length - 1; i >= 0; i--) {
@@ -347,6 +471,12 @@ export function InterviewClient() {
     if (sessionStatus !== "error" && sessionStatus !== "closed") return;
     const isError = sessionStatus === "error";
     const errorMessage = sessionError?.message ?? "Unknown realtime error";
+    // History persistence on unexpected close: 'error' if the transport
+    // surfaced an error, 'timeout' for an otherwise-clean close that
+    // wasn't initiated by the user or the scorecard tool. Idempotent —
+    // the explicit close paths (handleEnd, scorecard, idle watchdog)
+    // have already set `persistedRef.current = true`.
+    persistInterview(isError ? "error" : "timeout");
     queueMicrotask(() => {
       if (isError) {
         setTerminalError(errorMessage);
@@ -361,7 +491,7 @@ export function InterviewClient() {
       }
       teardownAudio();
     });
-  }, [sessionStatus, sessionError, teardownAudio]);
+  }, [sessionStatus, sessionError, teardownAudio, persistInterview]);
 
   // Idle + hard-cap watchdog. One interval covers both because they share
   // a clock and the work is trivial.
@@ -376,6 +506,7 @@ export function InterviewClient() {
         setWarningMessage(
           "Session paused — no audio detected for 10 minutes. Disconnecting.",
         );
+        persistInterview("timeout");
         teardownAudio();
         sessionRef.current?.disconnect();
         return;
@@ -389,7 +520,7 @@ export function InterviewClient() {
       }
     }, 1000);
     return () => window.clearInterval(interval);
-  }, [phase, connectedAt, teardownAudio]);
+  }, [phase, connectedAt, teardownAudio, persistInterview]);
 
   // Cleanup on unmount.
   useEffect(() => {
@@ -406,6 +537,9 @@ export function InterviewClient() {
     setWarningMessage(null);
     setTerminalError(null);
     setActiveSelection(selection);
+    // Fresh interview: re-arm the persistence guard so the next terminal
+    // transition actually writes to localStorage.
+    persistedRef.current = false;
     setPhase("connecting");
     // `session.connect()` reads the hook's internal `optionsRef` which is
     // synced via a post-commit effect. To make sure the freshest options
@@ -427,12 +561,15 @@ export function InterviewClient() {
   }, [phase, providerForHook, sessionStatus, session]);
 
   const handleEnd = useCallback(() => {
+    // Persist BEFORE disconnect so the post-close effect's fallback
+    // ('timeout') is a no-op for sessions the user explicitly ended.
+    persistInterview("ended_early");
     teardownAudio();
     session.disconnect();
     setPhase("configuring");
     setConnectedAt(null);
     setActiveSelection(null);
-  }, [session, teardownAudio]);
+  }, [session, teardownAudio, persistInterview]);
 
   const handleRestart = useCallback(() => {
     setScorecard(null);

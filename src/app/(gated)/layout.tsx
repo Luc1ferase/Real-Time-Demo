@@ -24,6 +24,12 @@ export default function GatedLayout({
               ← Home
             </Link>
             <div className="flex items-center gap-3">
+              <Link
+                href="/history"
+                className="text-xs font-medium text-neutral-600 hover:text-neutral-900 dark:text-neutral-300 dark:hover:text-white"
+              >
+                History
+              </Link>
               <span className="text-xs uppercase tracking-[0.18em] text-neutral-500">
                 Realtime Voice Demo
               </span>
