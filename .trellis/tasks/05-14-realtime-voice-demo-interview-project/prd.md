@@ -17,31 +17,34 @@
 
 - **Framework**: Next.js 16 (App Router) + TypeScript strict
 - **Styling**: Tailwind CSS + shadcn/ui
-- **Realtime SDK**: **`@openai/agents-realtime` v0.11.1**（官方 SDK，封装了 WebRTC peer connection、ephemeral token 流程、VAD、打断、conversation history）
-  - 用 `RealtimeAgent` + `RealtimeSession` 高层 API，避免手写 SDP / data channel
-  - Node side 同一 SDK 自动 fallback 到 WebSocket
+- **Multi-provider Realtime layer**: 用户运行时可切换 OpenAI / Gemini
+  - **OpenAI**: `@openai/agents-realtime` v0.11.1（WebRTC + 自动 VAD/打断）
+  - **Gemini**: `@google/genai` + 直接 WebSocket bidi（`gemini-3.1-flash-live-preview`，2026-05-14 已实测 setup 通过）
 - **Backend**: Next.js Route Handlers
-  - `POST /api/realtime/token` — 调用 OpenAI `POST /v1/realtime/client_secrets` 签发 ephemeral token，带 `OpenAI-Safety-Identifier` 头
-  - `POST /api/translate` — 字幕 overlay 用，输入文本 → `gpt-4o-mini` chat completion → 翻译文本
-  - `proxy.ts` — 口令门控（cookie 验证），保护两条 demo 路由
+  - `POST /api/realtime/token/openai` — 调 `/v1/realtime/client_secrets` 签发 ephemeral token，带 `OpenAI-Safety-Identifier`
+  - `POST /api/realtime/token/gemini` — 返回 Google API key（受口令门保护；下面安全说明）
+  - `POST /api/translate` — 字幕 overlay 用，文本→文本翻译（OpenAI `gpt-4o-mini` 或 Gemini `gemini-3.1-flash-lite`）
+  - `proxy.ts` — 口令门控（cookie 验证），保护所有非 gate 路由
 - **Deployment**: Vercel
-  - 环境变量：`OPENAI_API_KEY`、`DEMO_PASSWORD`
-  - 全程仅 server-side 持有 API key
+  - 环境变量：`OPENAI_API_KEY`、`GOOGLE_AI_STUDIO_KEY`、`DEMO_PASSWORD`
+  - OpenAI 走 ephemeral token，密钥永不离开 server
+  - Gemini 没有 ephemeral token 概念，**API key 会被发到浏览器**——靠口令门 + 短 TTL 配额 + 随时 rotate 来管理风险（demo 安全级别，不是生产标准）
 
 ### 模型选型
 
-| 用途 | 模型 | 端点 | 价格 | 备注 |
-|---|---|---|---|---|
-| Interview 主对话 | **`gpt-realtime-2`** | `/v1/realtime` | $32 in / $64 out / 1M audio tokens | 默认，GPT-5-class 推理，128K 上下文 |
-| Interview 备选切换 | `gpt-realtime-1.5`, `gpt-realtime`, `gpt-realtime-mini` | `/v1/realtime` | 同上 / mini 便宜 ~3x | UI 提供下拉切换，切换会重建 session |
-| Translator 路由 | **`gpt-realtime-translate`** | `/v1/realtime/translations` | **$0.034/min flat** | 专用翻译模型，70+ 输入 → 13 输出语言，**不用普通对话模型 + prompt hack** |
-| Overlay 字幕翻译 | `gpt-4o-mini` | `/v1/chat/completions` | 极便宜 | 文本→文本，已经从 Realtime transcript 拿到原文 |
+| 用途 | OpenAI | Gemini | 备注 |
+|---|---|---|---|
+| Interview 主对话 | `gpt-realtime-2` ($32 in / $64 out per 1M) | `gemini-3.1-flash-live-preview` ($3 in / $12 out per 1M ≈ 10x 便宜) | 用户可在 UI 切换 |
+| Interview 备选 | `gpt-realtime-1.5` / `gpt-realtime-mini` | `gemini-2.5-flash-native-audio-latest` | 设置面板下拉 |
+| Translator 路由 | `gpt-realtime-translate` (`/v1/realtime/translations`, $0.034/min) | 用 `gemini-3.1-flash-live-preview` + 强翻译 prompt（Gemini 暂无专用翻译端点） | 两边实现差异较大，UI 上注明 |
+| Overlay 字幕翻译 | `gpt-4o-mini` chat | `gemini-3.1-flash-lite` chat | 跟随主对话提供商 |
 
-### 音色
+### 音色 / 语音
 
-- 默认 **`marin`**（OpenAI 当前推荐高质量音色）
-- 设置面板可切换：`marin` / `cedar` / `alloy` / `ash` / `ballad` / `coral` / `echo` / `sage` / `shimmer` / `verse`
-- **重要约束**：音色在 session 第一次出音后不能改 → UI 必须在用户连接前选定，切换音色 = 重建 session
+- **OpenAI**: 默认 `marin`，可切 `cedar` / `alloy` / `ash` / `ballad` / `coral` / `echo` / `sage` / `shimmer` / `verse`（10 个）
+- **Gemini**: 默认 `Puck`，可切 `Charon` / `Kore` / `Fenrir` / `Aoede`（5 个）
+- **重要约束（OpenAI）**：音色在 session 第一次出音后不能改 → UI 必须在用户连接前选定，切换音色 = 重建 session
+- **音频采样率差异**：OpenAI 输入输出皆 24 kHz；Gemini 输入 **16 kHz**、输出 24 kHz。需要在浏览器端做重采样（Web Audio API `AudioContext.sampleRate` + offline resample，或捕获时直接设 16/24 kHz）
 
 ## Scenario (Decided)
 
@@ -96,10 +99,15 @@
 - 双语对照 UI（左中右英，逐句对应）
 
 **Settings (全局)**
-- 模型切换器（仅 /interview）：默认 `gpt-realtime-2`，可选 `gpt-realtime-1.5` / `gpt-realtime` / `gpt-realtime-mini`
-- 音色选择（仅 /interview）：默认 `marin`，可选 `cedar` / 8 个原始音色
+- **提供商切换器**：默认 OpenAI，可切 Gemini（运行时切换 → 重建 session）
+- 模型切换器（按提供商分组）：
+  - OpenAI: `gpt-realtime-2`（默认）/ `gpt-realtime-1.5` / `gpt-realtime` / `gpt-realtime-mini`
+  - Gemini: `gemini-3.1-flash-live-preview`（默认）/ `gemini-2.5-flash-native-audio-latest` / `gemini-2.5-flash-native-audio-preview-12-2025`
+- 音色选择（按提供商分组）：
+  - OpenAI: `marin`（默认）/ `cedar` / `alloy` / `ash` / `ballad` / `coral` / `echo` / `sage` / `shimmer` / `verse`
+  - Gemini: `Puck`（默认）/ `Charon` / `Kore` / `Fenrir` / `Aoede`
 - 推理强度（仅 `gpt-realtime-2`）：`minimal` / `low` / `medium` / `high` / `xhigh`（5 档，flagship 独有）
-- 切换模型/音色会**触发 session 重建**（UI 显示"重连中…"，因为音色一旦发声就锁定）
+- 切换提供商/模型/音色会**触发 session 重建**（UI 显示"重连中…"，因为 OpenAI 音色一旦发声就锁定，且提供商切换需要新的连接管线）
 
 **Session 时长保护**
 - Realtime API 硬上限 60 分钟（OpenAI 强制断开），未来不可扩展
@@ -116,17 +124,18 @@
 
 **通用**
 - [ ] 任意路由进入前必须输入 `DEMO_PASSWORD`（Edge proxy 拦截，cookie 持久 24h）
-- [ ] `OPENAI_API_KEY` 仅在 server route handler 出现，不进客户端 bundle、不进 network 请求 body
-- [ ] 浏览器 devtools network 面板看不到任何裸 API key
-- [ ] README 包含：本项目能力截图、5 分钟启动指引、架构图、关键技术决策说明（为什么用 SDK / 为什么 /translator 用专用端点 / overlay 怎么不污染主会话）
+- [ ] `OPENAI_API_KEY` 仅在 server route handler 出现，不进客户端 bundle、不进 network 请求 body（OpenAI 走 ephemeral token）
+- [ ] `GOOGLE_AI_STUDIO_KEY` 在客户端可见时**必须**先经过口令门保护，且 README 明确标注此限制（demo 级安全模型，不是生产标准）
+- [ ] README 包含：本项目能力截图、5 分钟启动指引、架构图、提供商对比表、关键技术决策（为什么做多提供商抽象 / 为什么 /translator 用 OpenAI 专用端点 / overlay 怎么不污染主会话 / Gemini key 暴露的权衡）
 
 **/interview 路由**
-- [ ] 点"开始面试"按钮，3 秒内能开始说话、听到 AI 回复
-- [ ] AI 说话时用户可打断（barge-in），AI 立即停下并响应
+- [ ] 点"开始面试"按钮，3 秒内能开始说话、听到 AI 回复（任一提供商）
+- [ ] AI 说话时用户可打断（barge-in），AI 立即停下并响应（任一提供商）
 - [ ] 双方 transcript 流式显示
-- [ ] AI 可按阶段切换（warm-up → technical → behavioral → feedback），通过 function calling 实现
+- [ ] AI 可按阶段切换（warm-up → technical → behavioral → feedback），通过 function calling 实现（两个提供商的 function 协议都要适配）
 - [ ] 面试结束生成评分卡片（沟通 / 技术深度 / 结构化思维 3 个维度），可截图分享
-- [ ] 设置面板可切换模型、音色、推理强度，切换后重建 session
+- [ ] 设置面板可切换**提供商 / 模型 / 音色 / 推理强度**，切换后重建 session
+- [ ] 在两个提供商之间切换，对话能继续流畅进行（验证抽象层不漏抽象）
 
 **/translator 路由**
 - [ ] 选择源/目标语言后开始，用户说话 → 听到译文音频 + 看到双语字幕
@@ -159,51 +168,75 @@
 ## Research References
 
 - [`research/realtime-api-overview.md`](research/realtime-api-overview.md) — OpenAI Realtime API 2026-05-14 完整当前状态（模型清单 / 端点 / 事件协议 / SDK / 音色 / 限制）
+- [`research/gemini-live-api.md`](research/gemini-live-api.md) — Gemini Live API 2026-05-14 实测状态（free tier 可用、`gemini-3.1-flash-live-preview` WS bidi 已验证、协议差异表、与 OpenAI 的对比）
 
 ## Technical Approach
 
 ### 目录结构（计划）
 
 ```
-app/
-  (gated)/              # 口令门控区
-    interview/page.tsx  # AI 模拟面试官 + 可选字幕 overlay
-    translator/page.tsx # 实时同传
-    layout.tsx          # 顶部导航 + 共享设置抽屉
-  api/
-    realtime/token/route.ts   # 签发 ephemeral token
-    translate/route.ts        # 字幕翻译（gpt-4o-mini chat）
-  page.tsx              # 首页（介绍 + 进入入口）
-  gate/page.tsx         # 口令输入页
-lib/
-  realtime/
-    use-realtime-session.ts   # @openai/agents-realtime 的 React hook 封装
-    use-translator-session.ts # /v1/realtime/translations 专用 hook
-    tools.ts                  # function tools 定义（advance_stage, give_feedback）
-    instructions.ts           # 各路由的 system instructions
-  translate/
-    translate-stream.ts       # 拿 Realtime transcript 调 /api/translate
-proxy.ts          # 口令门控
+src/
+  app/
+    (gated)/                  # 口令门控区
+      interview/page.tsx      # AI 模拟面试官 + 可选字幕 overlay
+      translator/page.tsx     # 实时同传
+      layout.tsx              # 顶部导航 + 共享设置抽屉（含提供商切换器）
+    api/
+      realtime/token/
+        openai/route.ts       # OpenAI ephemeral token（已实现）
+        gemini/route.ts       # Gemini key 派发（受口令门保护）
+      translate/route.ts      # 字幕翻译，按当前提供商路由
+    page.tsx                  # 首页（介绍 + 进入入口）
+    gate/page.tsx             # 口令输入页（已实现）
+  lib/
+    realtime/
+      provider.ts             # RealtimeProvider 接口 + 类型契约
+      openai-provider.ts      # @openai/agents-realtime 实现
+      gemini-provider.ts      # @google/genai + WS bidi 实现
+      use-realtime-session.ts # provider-agnostic hook
+      use-translator-session.ts
+      tools.ts                # function tools 定义（双方协议适配在 provider 内）
+      instructions.ts         # system instructions
+    translate/
+      translate-stream.ts     # transcript → /api/translate
+    env.ts                    # 已实现
+    gate.ts                   # 已实现
+  proxy.ts                    # 口令门控（已实现）
 ```
 
 ### 关键技术决策（ADR-lite）
 
-1. **使用官方 SDK `@openai/agents-realtime` 而非裸 WebRTC**
+1. **多提供商抽象层（OpenAI + Gemini 运行时切换）**
+   - Context: 开发期想用免费 Gemini，生产期可能换 OpenAI；纯换不便宜（协议不兼容），但做成抽象层反而能讲出多提供商工程能力
+   - Decision: 定义 `RealtimeProvider` 接口（`connect`、`disconnect`、事件订阅），两套实现（OpenAI / Gemini），UI 提供商切换会重建 session
+   - Consequences: 多 ~1 天工作量；面试故事最强（"我评估两个提供商、抽出 transport-agnostic 接口、用户可即时对比"）；生产期换提供商零成本
+
+2. **使用官方 SDK `@openai/agents-realtime` 而非裸 WebRTC（OpenAI 一侧）**
    - Context: 1-2 天预算，需要稳定的打断/VAD/历史管理
    - Decision: 用 `RealtimeAgent` + `RealtimeSession` 高层 API
-   - Consequences: 代码量大幅减少；牺牲一点底层可见性，但面试演示时可以讲"我选择官方 SDK 而非重造轮子"作为工程判断点
+   - Consequences: 代码量大幅减少；牺牲一点底层可见性
 
-2. **/translator 用专用 `gpt-realtime-translate` 端点而非普通对话模型**
-   - Context: 同传需要"只输出翻译、不要对话式废话"
-   - Decision: 直接用 `/v1/realtime/translations` + `gpt-realtime-translate`
-   - Consequences: 更可靠的翻译质量；flat 定价更可预测；展示"为每个 job 选对工具"的产品意识
+3. **Gemini 一侧用 `@google/genai` + 原生 WebSocket bidi**
+   - Context: Gemini Live 只支持 WebSocket bidi（无 WebRTC），没有官方 React SDK
+   - Decision: 用 `@google/genai` 的 live API；浏览器侧手写 WS + AudioWorklet 处理 16kHz 输入重采样
+   - Consequences: 比 OpenAI 一侧代码多；可讲"为每个提供商挑最优传输"的工程判断
 
-3. **字幕 overlay 用 chat completion 旁路而非加 Realtime channel**
+4. **/translator 用 OpenAI 专用 `gpt-realtime-translate` 端点**（提供商绑定）
+   - Context: 同传需要"只输出翻译、不要对话式废话"，OpenAI 有专用端点，Gemini 没有
+   - Decision: /translator 强制使用 OpenAI，UI 标注"翻译模式仅 OpenAI"
+   - Consequences: 不是完全 provider-agnostic，但避免给 Gemini 写一套不可靠的 prompt-hack
+
+5. **字幕 overlay 用 chat completion 旁路而非加 Realtime channel**
    - Context: 想在面试模式叠加翻译字幕，又不能干扰对话
-   - Decision: 监听 Realtime `response.audio_transcript.done` → 调 `/api/translate`（gpt-4o-mini chat）→ 推回前端显示
-   - Consequences: 零干扰原对话；翻译延迟 1-2 秒可接受；额外成本极低
+   - Decision: 监听主对话 transcript done 事件 → 调 `/api/translate`（按当前提供商选 `gpt-4o-mini` 或 `gemini-3.1-flash-lite`）→ 推回前端显示
+   - Consequences: 零干扰原对话；翻译延迟 1-2 秒可接受
 
-4. **口令门控用 Edge proxy 而非完整 auth 系统**
+6. **Gemini key 暴露给浏览器，靠口令门 + rotation 控制风险**
+   - Context: Gemini AI Studio 没有 ephemeral token 概念，原生 API key 必须用 `?key=` 直传
+   - Decision: 接受这个权衡，但加三层保护：(a) 口令门 (b) 用专用低额度 key (c) README 明确警告 + 每周 rotate
+   - Consequences: 不是生产标准，但 demo 阶段可控；可在面试时主动讲这个权衡和我看到的"如果是生产"该怎么做（服务端代理 WS）
+
+7. **口令门控用 Edge proxy 而非完整 auth 系统**
    - Context: 仅需防陌生人乱试 demo URL 烧钱，不是真实产品
    - Decision: 单一 `DEMO_PASSWORD` 环境变量 + cookie 验证
    - Consequences: 5 分钟实现；如果未来想推广到真实多用户，需要替换为 NextAuth 之类
@@ -217,3 +250,4 @@ proxy.ts          # 口令门控
 - **2026-05-14** 部署 Vercel + 口令门控，不做限速
 - **2026-05-14** 加 localStorage 会话历史页（额外 ~1h 工作量，强化前端能力展示）
 - **2026-05-14** /translator UI 按段分组显示（一句一行，类 DeepL Live）
+- **2026-05-14** **新增多提供商支持**：OpenAI + Gemini 运行时可切换。原因：测试到 Gemini key 在 free tier 可用，且 Gemini Live 比 OpenAI 便宜 10x；做成抽象层既省开发期成本也强化面试故事。代价：约 +1 天工作量；/translator 路由保持 OpenAI 专属（Gemini 无专用翻译端点）
